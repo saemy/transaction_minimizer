@@ -68,8 +68,8 @@ The algorithm works in different phases:
 1. All cyclic payments are removed. This is done by subtracting the smallest
    amount along a circle from all others and then removing its edge:
 
-  Assume w.l.o.g. ![equation](http://www.sciweavers.org/tex2img.php?eq=p_n%20%3D%20%5Cmin_%7Bi%3D%5C%7B1..n%5C%7D%7D%28p_i%29&bc=Transparent&fc=Black&im=png&fs=12&ff=arev&edit=0)
-  then ![equation](http://www.sciweavers.org/tex2img.php?eq=A_1%20%5Coverset%7Bp_1%7D%7B%5Clongrightarrow%7D%20A_2%20%5Coverset%7Bp_2%7D%7B%5Clongrightarrow%7D%20...%20%5Coverset%7Bp_%7Bn-1%7D%7D%7B%5Clongrightarrow%7D%20A_n%20%5Coverset%7Bp_n%7D%7B%5Clongrightarrow%7D%20A_1%20%5CLongrightarrow%20A_1%20%5Coverset%7Bp_1%20-%20p_n%7D%7B%5Clongrightarrow%7D%20A_2%20%5Coverset%7Bp_2%20-%20p_n%7D%7B%5Clongrightarrow%7D%20...%20%5Coverset%7Bp_%7Bn-1%7D%20-%20p_n%7D%7B%5Clongrightarrow%7D%20A_n&bc=Transparent&fc=Black&im=png&fs=12&ff=arev&edit=0). 
+  Assume w.l.o.g. ![equation](http://www.sciweavers.org/tex2img.php?eq=p_n%20%3D%20%5Cmin_%7Bi%3D%5C%7B1..n%5C%7D%7D%28p_i%29&bc=Transparent&fc=Black&im=gif&fs=12&ff=arev&edit=0)
+  then ![equation](http://www.sciweavers.org/tex2img.php?eq=A_1%20%5Coverset%7Bp_1%7D%7B%5Clongrightarrow%7D%20A_2%20%5Coverset%7Bp_2%7D%7B%5Clongrightarrow%7D%20...%20%5Coverset%7Bp_%7Bn-1%7D%7D%7B%5Clongrightarrow%7D%20A_n%20%5Coverset%7Bp_n%7D%7B%5Clongrightarrow%7D%20A_1%20%5CLongrightarrow%20A_1%20%5Coverset%7Bp_1%20-%20p_n%7D%7B%5Clongrightarrow%7D%20A_2%20%5Coverset%7Bp_2%20-%20p_n%7D%7B%5Clongrightarrow%7D%20...%20%5Coverset%7Bp_%7Bn-1%7D%20-%20p_n%7D%7B%5Clongrightarrow%7D%20A_n&bc=Transparent&fc=Black&im=gif&fs=12&ff=arev&edit=0). 
 
 2. The payment span is computed. Since all circles are removed by now we operate
    on a directed acyclic payment graph (DAG). However, it can still occur that
