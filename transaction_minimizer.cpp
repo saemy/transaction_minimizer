@@ -27,6 +27,10 @@ void computePaymentsSpan(const Graph &payments, Graph *paymentsSpan,
                          map<Edge, set<Vertex> > *routingTable);
 void computePaymentAmounts(const Graph &payments, Graph *paymentsSpan,
                            const map<Edge, set<Vertex> > &routingTable);
+
+vector<double> computeNodeGain(const Graph &payments);
+void verifyNodeGain(const vector<double> &originalNodeGain,
+                    const Graph &payments);
 } // namespace
 
 void reduceToMinimumTransactions(Graph *paymentsSpan) {
@@ -34,6 +38,9 @@ void reduceToMinimumTransactions(Graph *paymentsSpan) {
     if (num_edges(*paymentsSpan) == 0) {
         return;
     }
+
+    // Computes the outgoing minus incoming payments for each node.
+    const vector<double> &nodeGain = computeNodeGain(*paymentsSpan);
 
     // Clones the input graph's vertices into the payments graph and removes the
     // edges from the input graph.
@@ -59,6 +66,9 @@ void reduceToMinimumTransactions(Graph *paymentsSpan) {
 
     // Computes the final payments along the edges in the payments span.
     computePaymentAmounts(payments, paymentsSpan, routingTable);
+
+    // Verifies the payment span.
+    verifyNodeGain(nodeGain, *paymentsSpan);
 }
 
 namespace {
@@ -413,6 +423,45 @@ void computePaymentAmounts(const Graph &payments, Graph *paymentsSpan,
         }
     }
 
+}
+
+vector<double> computeNodeGain(const Graph &payments) {
+    vector<double> nodeGain(num_vertices(payments), 0.0d);
+
+    Graph::edge_iterator eit, eend;
+    for (tie(eit, eend) = edges(payments); eit != eend; ++eit) {
+        const Vertex from = source(*eit, payments);
+        const Vertex to = target(*eit, payments);
+        double amount = get(edge_capacity, payments, *eit);
+
+        nodeGain[from] -= amount;
+        nodeGain[to] += amount;
+    }
+
+    return nodeGain;
+}
+
+void verifyNodeGain(const vector<double> &originalNodeGain,
+                    const Graph &payments) {
+    bool error = false;
+    const vector<double> &newGain = computeNodeGain(payments);
+    for (size_t i = 0; i < newGain.size(); ++i) {
+        // Checks if the difference is bigger than one cent.
+        if (std::fabs(originalNodeGain[i] - newGain[i]) > 0.01) {
+            error = true;
+            fprintf(stderr, "Gain-error at node '%s' (%.2f vs %.2f).\n",
+                    get(boost::vertex_name, payments, i).c_str(),
+                    originalNodeGain[i], newGain[i]);
+        }
+    }
+
+    if (error) {
+        fprintf(stderr,
+                "Please report this error with the payments you defined (if "
+                "possible) at https://github.com/saemy/transaction_minimizer."
+                "\n");
+        std::exit(1);
+    }
 }
 
 } // namespace
