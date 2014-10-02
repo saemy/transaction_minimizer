@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <iostream>
 #include <map>
+#include <sstream>
 
 #include "transaction_minimizer.h"
 
@@ -27,15 +28,22 @@ Graph readGraphFromStdIO() {
     Graph payments;
 
     map<std::string, Vertex> nameToVertex;
-    while (true) {
+    while (!std::cin.eof()) {
         // Reads in the next edge.
+        std::string line;
+        getline(std::cin, line);
+
+        if (line.length() < 2 || line[0] == '#' ||
+            line.compare(0, 2, "//") == 0) {
+            // Ignores empty or comment lines.
+            continue;
+        }
+
+        std::stringstream sstream(line);
+
         std::string fromName, toName;
         double amount;
-        std::cin >> fromName >> toName >> amount;
-
-        if (std::cin.eof()) {
-            break;
-        }
+        sstream >> fromName >> toName >> amount;
 
         // Maps the names to vertices.
         Vertex from = mapNameToVertex(fromName, &payments, &nameToVertex);
