@@ -68,8 +68,8 @@ The algorithm works in different phases:
 1. All cyclic payments are removed. This is done by subtracting the smallest
    amount along a circle from all others and then removing its edge:
 
-  Assume w.l.o.g. ![equation](http://www.sciweavers.org/tex2img.php?eq=p_n%20%3D%20%5Cmin_%7Bi%3D%5C%7B1..n%5C%7D%7D%28p_i%29&bc=Transparent&fc=Black&im=gif&fs=12&ff=arev&edit=0)
-  then ![equation](http://www.sciweavers.org/tex2img.php?eq=A_1%20%5Coverset%7Bp_1%7D%7B%5Clongrightarrow%7D%20A_2%20%5Coverset%7Bp_2%7D%7B%5Clongrightarrow%7D%20%5Cdots%20%5Coverset%7Bp_%7Bn-1%7D%7D%7B%5Clongrightarrow%7D%20A_n%20%5Coverset%7Bp_n%7D%7B%5Clongrightarrow%7D%20A_1%20%5CLongrightarrow%20A_1%20%5Coverset%7Bp_1%20-%20p_n%7D%7B%5Clongrightarrow%7D%20A_2%20%5Coverset%7Bp_2%20-%20p_n%7D%7B%5Clongrightarrow%7D%20%5Cdots%20%5Coverset%7Bp_%7Bn-1%7D%20-%20p_n%7D%7B%5Clongrightarrow%7D%20A_n&bc=Transparent&fc=Black&im=gif&fs=12&ff=arev&edit=0). 
+   Assume w.l.o.g. ![equation](http://www.sciweavers.org/tex2img.php?eq=p_n%20%3D%20%5Cmin_%7Bi%3D%5C%7B1..n%5C%7D%7Dp_i&bc=Transparent&fc=Black&im=png&fs=12&ff=arev&edit=0)
+   then ![equation](http://www.sciweavers.org/tex2img.php?eq=A_1%20%5Coverset%7Bp_1%7D%7B%5Clongrightarrow%7D%20A_2%20%5Coverset%7Bp_2%7D%7B%5Clongrightarrow%7D%20%5Cdots%20%5Coverset%7Bp_%7Bn-1%7D%7D%7B%5Clongrightarrow%7D%20A_n%20%5Coverset%7Bp_n%7D%7B%5Clongrightarrow%7D%20A_1%20%5CLongrightarrow%20A_1%20%5Coverset%7Bp_1%20-%20p_n%7D%7B%5Clongrightarrow%7D%20A_2%20%5Coverset%7Bp_2%20-%20p_n%7D%7B%5Clongrightarrow%7D%20%5Cdots%20%5Coverset%7Bp_%7Bn-1%7D%20-%20p_n%7D%7B%5Clongrightarrow%7D%20A_n&bc=Transparent&fc=Black&im=png&fs=12&ff=arev&edit=0). 
 
 2. The payment span is computed. Since all circles are removed by now we operate
    on a directed acyclic payment graph (DAG). However, it can still occur that
@@ -80,21 +80,25 @@ The algorithm works in different phases:
    ```
    The span is found by doing a special form of a topological sort. It starts at
    the nodes that only receive money (the leaves in the DAG) and then operates
-   in rounds: In round *i* all nodes that are reachable in *i* hops from the
-   leaves (using reversed edges) are inspected. Nodes that already are in the
-   span are ignored. If an observed node only has edges to nodes that already
-   are in the span, it is added. Moreover, the edges that link to nodes that
-   were added in round *i-1* are added as well (There allways is at least one
-   such edge since otherwise the node would have been added in a previous round).
-   Eventually, all nodes are included in the span and this phase is finished.
+   in rounds: In each round the sinks of the last round are processed. Their
+   incoming edges are marked as usable. As soon as a node only has outgoing
+   edges that are usable it is inserted to the next round's sink list.
 
-3. The payments along the edges in the span are computed. This is done by also
-   building a *routing table* in the previous step. That table tells for a given
-   node which outgoing edge that has to be used to reach some destination node.
+   For each sink node the reachable nodes are computed by taking the union of
+   the reachable nodes of its children (plus itself). Edges that only reach
+   nodes that are also reachable through others are dropped.
+   Additionaly a *routing table* is constructed that tells for a given
+   (source, target) tuple which next hop to take. Note, there may be multiple
+   next hops if there is e.g. a diamond shaped graph where each edge is
+   required.
+
+3. The payments along the edges in the span are computed. This is done by
+   considering the routing table from the previous step.
    Payment amount calculation is started at the nodes that only have to pay (the
-   roots of the span). They are marked with the destination node and sent along
-   the according edge. A breath-first search propagates the payments through the
-   payment span.
+   roots of the span). Payments are marked with the destination node and sent
+   to the next hop. If there are multiple next hops available, the payments are
+   evenly distributed to reduce the transaction amounts. The payments are then
+   propagated through the payments span in a breadth-first search manner.
 
 4. It is checked that the incoming minus outgoing payments stay the same for
    each node in the input graph and the resulting payments span. This verifies
@@ -102,7 +106,9 @@ The algorithm works in different phases:
 
 TODOs
 -----
-- If multiple spans are available with the same number of transactions, choose
-  the one with the smallest (maximum) transaction amount.
+- If multiple paths between two nodes are available, distribute the payments
+  s.t. a globally smallest maximum transaction amount is found. A local
+  distribution is already done but this might still lead to an unoptimal global
+  maximum transaction amount.
 - Add a flag if payment tunneling should be used or if only circlic payments
   should be removed.

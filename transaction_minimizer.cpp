@@ -11,64 +11,56 @@
 #include <boost/graph/copy.hpp>
 #include <boost/graph/depth_first_search.hpp>
 #include <boost/graph/topological_sort.hpp>
-#include <boost/numeric/ublas/matrix.hpp>
 
 using namespace boost;
 
-using boost::numeric::ublas::matrix;
-using boost::numeric::ublas::zero_matrix;
 using std::map;
+using std::pair;
 using std::set;
 using std::vector;
 
 namespace {
 void removeCircularPayments(Graph *payments);
 void computePaymentsSpan(const Graph &payments, Graph *paymentsSpan,
-                         map<Edge, set<Vertex> > *routingTable);
-void computePaymentAmounts(const Graph &payments, Graph *paymentsSpan,
-                           const map<Edge, set<Vertex> > &routingTable);
+                         map<pair<Vertex, Vertex>, set<Vertex> > *routingTable);
+void computePaymentAmounts(
+        const Graph &payments, Graph *paymentsSpan,
+        const map<pair<Vertex, Vertex>, set<Vertex> > &routingTable);
 
-vector<double> computeNodeGain(const Graph &payments);
-void verifyNodeGain(const vector<double> &originalNodeGain,
-                    const Graph &payments);
+void verifyNodeGain(const Graph &left, const Graph &right);
 } // namespace
 
-void reduceToMinimumTransactions(Graph *paymentsSpan) {
+void createMinimumTransactionsGraph(const Graph &payments,
+                                    Graph *paymentsSpan) {
     // Early-abort for empty graphs.
-    if (num_edges(*paymentsSpan) == 0) {
+    if (num_edges(payments) == 0) {
+        copy_graph(payments, *paymentsSpan);
         return;
     }
 
-    // Computes the outgoing minus incoming payments for each node.
-    const vector<double> &nodeGain = computeNodeGain(*paymentsSpan);
-
-    // Clones the input graph's vertices into the payments graph and removes the
-    // edges from the input graph.
-    Graph payments;
-    copy_graph(*paymentsSpan, payments);
-    while (num_edges(*paymentsSpan)) {
-        remove_edge(*edges(*paymentsSpan).first, *paymentsSpan);
-    }
-
-    // Per-edge routing table that lists all the vertices that are reached when
-    // using this edge in the payments span.
-    map<Edge, set<Vertex> > routingTable;
+    // Clones the payments graph into the payments DAG.
+    Graph paymentsDAG;
+    copy_graph(payments, paymentsDAG);
 
     // Removes circular payments by reducing the payment amounts on the circle
     // by the smallest amount and removing the edges that result in an amount of
     // zero.
-    removeCircularPayments(&payments);
+    removeCircularPayments(&paymentsDAG);
     
-    // Computes the spanning tree of the payments graph s.t. every node which
-    // was connected to an other one still is, however, only over exactly one
-    // path.
-    computePaymentsSpan(payments, paymentsSpan, &routingTable);
+    // Routing table that returns the next hops one can take at given source
+    // node to reach given destination node.
+    map<pair<Vertex, Vertex>, set<Vertex> > routingTable;
+
+    // Computes the spanning tree of the payments graph s.t. the number of edges
+    // is minimized while still keeping the same connected components in the
+    // graph.
+    computePaymentsSpan(paymentsDAG, paymentsSpan, &routingTable);
 
     // Computes the final payments along the edges in the payments span.
-    computePaymentAmounts(payments, paymentsSpan, routingTable);
+    computePaymentAmounts(paymentsDAG, paymentsSpan, routingTable);
 
     // Verifies the payment span.
-    verifyNodeGain(nodeGain, *paymentsSpan);
+    verifyNodeGain(payments, *paymentsSpan);
 }
 
 namespace {
@@ -226,157 +218,196 @@ void removeCircularPayments(Graph *payments) {
             lastVertex = *it;
         }
     } while (true);
+
+#ifdef DEBUG
+    // Prints the DAG.
+    printf("Final DAG: \n");
+    Graph::edge_iterator eit, eend;
+    for (tie(eit, eend) = edges(*payments); eit != eend; ++eit) {
+        const Vertex &u = source(*eit, *payments);
+        const Vertex &v = target(*eit, *payments);
+        const double &amount = get(edge_capacity, *payments, *eit);
+        printf("%s --%.2f--> %s\n",
+               get(boost::vertex_name, *payments, u).c_str(), amount,
+               get(boost::vertex_name, *payments, v).c_str());
+    }
+    printf("\n");
+#endif
 }
 
-// Assumes the incoming graph does not contain circles.
-void computePaymentsSpan(const Graph &payments, Graph *paymentsSpan,
-                         map<Edge, set<Vertex> > *routingTable) {
-    // The number of vertices in the payments graph.
+/**
+ * @brief Searches for the minimum set of edges that keep the DAG given in
+ *        payments connected and writes this span into paymentsSpan. Moreover,
+ *        a routing table is generated that tells for each (source, destination)
+ *        touple, which next hops can be used.
+ *
+ * The search for the span is done by starting at the sinks which are marked as
+ * reachable nodes. Now, in each round, the sinks are processed. Their reachable
+ * nodes are set as the union of the reachable nodes of its children. Moreover,
+ * the routing table gets filled by telling which nodes can be reached by using
+ * which edge. Edges that only reach nodes that are also reachable by other
+ * edges are removed.
+ *
+ * @param payments The DAG that contains the payments among all people
+ * @param paymentsSpan (Out) The span with minimum edge size that keeps the
+ *                           components in payments connected.
+ * @param routingTable (Out) (source, dest) -> {next hops}. Multiple next hops
+ *                           can appear if that edge is required anyways. One
+ *                           can then e.g. distribute payments along these
+ *                           paths to reduce the maximum transaction amount.
+ */
+void computePaymentsSpan(
+        const Graph &payments, Graph *paymentsSpan,
+        map<pair<Vertex, Vertex>, set<Vertex> > *routingTable) {
     const int n = num_vertices(payments);
 
-    // Per vertex bitmap that flags nodes that are not reaching other nodes.
-    vector<bool> longTimeNonReacher(n, true);
+    // Clones the payments DAG into the payments span.
+    copy_graph(payments, *paymentsSpan);
 
-    // Constructs the adjacency matrix of the payments graph.
-    matrix<bool> adjacencyMatrix = zero_matrix<bool>(n, n);
+    // The list of nodes that are reachable through a given node.
+    map<Vertex, set<Vertex> > reachableNodes;
 
-    Graph::edge_iterator eit, eend;
-    for (tie(eit, eend) = edges(payments); eit != eend; ++eit) {
-        const Vertex from = source(*eit, payments);
-        const Vertex to = target(*eit, payments);
-
-        adjacencyMatrix(from, to) = true;
-        longTimeNonReacher[from] = false;
-    }
-
-    // Adds the sinks to the list of the unconnected non-reachers.
-    set<Vertex> unconnectedNonReacher;
+    // Searches for the sinks.
+    queue<Vertex> sinks;
     for (int i = 0; i < n; ++i) {
-        if (longTimeNonReacher[i]) {
-            unconnectedNonReacher.insert(i);
+        if (out_degree(i, payments) == 0) {
+            reachableNodes[i].insert(i); // Adds itself as a reachable node.
+            sinks.push(i);
         }
     }
 
-#if DEBUG
-        // prints the hop matrix.
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                std::cout << adjacencyMatrix(i, j) << ' ';
-            }
-            std::cout << '\n';
-        }
-        std::cout << '\n';
-#endif
-
-    // Computes the adjacency matrices for increasing hop count.
-    matrix<bool> lastHopMatrix = adjacencyMatrix;
+    // Runs over the sinks and marks all incoming edges to it as useable. If by
+    // that all out-edges of a node are marked as useable, it is processed and
+    // added to the sinks of the next round.
+    vector<Vertex> numUsableEdges(n, 0);
     do {
+        queue<Vertex> nextSinks;
+        while (!sinks.empty()) {
+            const Vertex &t = sinks.front();
+            sinks.pop();
 
-        // Calculates the next hop adjacency matrix.
-        matrix<bool> hopMatrix = prod(lastHopMatrix, adjacencyMatrix);
-        lastHopMatrix = hopMatrix;
+            // Processes this sink node.
+            // Adds itself as a reachable node.
+            reachableNodes[t].insert(t);
 
-#if DEBUG
-        // prints the hop matrix.
-        for (int i = 0; i < n; ++i) {
-            for (int j = 0; j < n; ++j) {
-                std::cout << hopMatrix(i, j) << ' ';
-            }
-            std::cout << '\n';
-        }
-        std::cout << '\n';
-#endif
+            // Computes the reachable nodes of s by uniting the
+            // reachable nodes of its children.
+            vector<int> numPathsToNode(n, 0);
+            Graph::out_edge_iterator eit2, eend2;
+            for (tie(eit2, eend2) = out_edges(t, payments); eit2 != eend2;
+                 ++eit2) {
+                const Vertex &t2 = target(*eit2, payments);
+                set<Vertex> &reachableNodesOfT2 = reachableNodes[t2];
 
-        set<Vertex> nextUnconnectedNonReacher = unconnectedNonReacher;
+                reachableNodes[t].insert(reachableNodesOfT2.begin(),
+                                         reachableNodesOfT2.end());
 
-        // Checks if there are still connections in the matrix and searches for
-        // nodes that do not reach anything for the first time.
-        bool hasConnection = false;
-        for (int i = 0; i < n; ++i) {
-            if (longTimeNonReacher[i]) {
-                continue;
-            }
-
-            // Checks if the node j has a connection to another one.
-            bool reacher = false;
-            for (int j = 0; j < n && !reacher; ++j) {
-                reacher |= hopMatrix(i, j);
-            }
-
-            // If this node does not reach anything (for the first time) -> adds
-            // a link to the non-reacher of the last round (if existing in the
-            // original graph).
-            if (!reacher) {
-                longTimeNonReacher[i] = true;
-
+                // Increases the path count for each reachable node of
+                // t2.
                 for (set<Vertex>::const_iterator it =
-                         unconnectedNonReacher.begin();
-                     it != unconnectedNonReacher.end(); ++it) {
-                    if (edge(i, *it, payments).second) {
-                        assert((unsigned) i != *it);
-
-                        // They are connected in the payments graph -> connects
-                        // them in the span.
-                        Edge e;
-                        tie(e, tuples::ignore) =
-                            add_edge(i, *it, *paymentsSpan);
-
-                        nextUnconnectedNonReacher.erase(*it);
-
-                        // Constructs the routing table entry for this edge.
-                        set<Vertex> &rte = (*routingTable)[e];
-                        rte.clear();
-                        rte.insert(*it);
-                        Graph::out_edge_iterator oeit, oeend;
-                        for (tie(oeit, oeend) = out_edges(*it, *paymentsSpan);
-                             oeit != oeend; ++oeit) {
-                            const set<Vertex> &destRte = (*routingTable)[*oeit];
-
-                            // Combines the rte with the outgoing rtes of the to
-                            // vertex.
-                            set<Vertex> tmpRte;
-                            std::set_union(rte.begin(), rte.end(),
-                                           destRte.begin(), destRte.end(),
-                                           std::inserter(tmpRte, tmpRte.end()));
-                            rte.swap(tmpRte);
-                        }
-                    }
+                     reachableNodesOfT2.begin(); it != reachableNodesOfT2.end();
+                     ++it) {
+                    ++numPathsToNode[*it];
                 }
-                nextUnconnectedNonReacher.insert(i);
             }
-            hasConnection |= reacher;
-        }
 
-        unconnectedNonReacher = nextUnconnectedNonReacher;
+            // Computes the routing table for node s. Every edge that
+            // only reaches nodes that are also reachable by others
+            // (numPathsToNode[i] > 1) are not used.
+            for (tie(eit2, eend2) = out_edges(t, payments); eit2 != eend2;
+                 ++eit2) {
+                const Vertex &t2 = target(*eit2, payments);
+                set<Vertex> &reachableNodesOfT2 = reachableNodes[t2];
 
-        if (!hasConnection) {
-            break;
-        }
-    } while (true);
+                // Checks if the current edge is required.
+                bool isRequiredEdge = false;
+                for (set<Vertex>::const_iterator it =
+                     reachableNodesOfT2.begin();
+                     it != reachableNodesOfT2.end() && !isRequiredEdge; ++it) {
+                    isRequiredEdge |= numPathsToNode[*it] == 1;
+                }
 
-#if DEBUG
-    // Prints the payments span.
-    for (tie(eit, eend) = edges(*paymentsSpan); eit != eend; ++eit) {
-        printf("%lu -> %lu (rte:",
-               source(*eit, *paymentsSpan), target(*eit, *paymentsSpan));
-        for (set<Vertex>::const_iterator it = (*routingTable)[*eit].begin();
-             it != (*routingTable)[*eit].end(); ++it) {
-            std::cout << ' ' << *it;
+                // Adds the edge to the routing table if it is required.
+                if (isRequiredEdge) {
+                    for (set<Vertex>::const_iterator it =
+                         reachableNodesOfT2.begin();
+                         it != reachableNodesOfT2.end(); ++it) {
+                        // The next hop from t to *it is t2.
+                        (*routingTable)[std::make_pair(t, *it)].insert(t2);
+                    }
+                } else {
+                    // Removes the unused edge from the payments span.
+                    remove_edge(t, t2, *paymentsSpan);
+                }
+            }
+
+            // Marks the in-edges to t as useable.
+            Graph::in_edge_iterator eit, eend;
+            for (tie(eit, eend) = in_edges(t, payments); eit != eend; ++eit) {
+                const Vertex &s = source(*eit, payments);
+                ++numUsableEdges[s];
+
+                if (out_degree(s, payments) == numUsableEdges[s]) {
+                    // All out-edges of s are useable -> adds s to the
+                    // next-round sinks.
+                    nextSinks.push(s);
+                }
+            }
         }
-        std::cout << ")\n";
+        swap(sinks, nextSinks);
+    } while (!sinks.empty());
+
+#ifdef DEBUG
+    printf("Payments span:\n");
+    for (int i = 0; i < n; ++i) {
+        printf("Vertex '%s'", get(vertex_name, *paymentsSpan, i).c_str());
+        printf(" (rn: ");
+        for (set<Vertex>::const_iterator it = reachableNodes[i].begin();
+             it != reachableNodes[i].end(); ++it) {
+            printf("%s%s",
+                   it != reachableNodes[i].begin() ? ", " : "",
+                   get(vertex_name, *paymentsSpan, *it).c_str());
+        }
+        printf(")\n");
+
+        if (out_degree(i, *paymentsSpan) > 0) {
+            printf ("  -> ");
+            Graph::out_edge_iterator oeit, oeend;
+            bool first = true;
+            for (tie(oeit, oeend) = out_edges(i, *paymentsSpan); oeit != oeend;
+                 ++oeit) {
+                const Vertex &t = target(*oeit, *paymentsSpan);
+                printf("%s%s",
+                       get(vertex_name, *paymentsSpan, t).c_str(),
+                       first ? "" : ", ");
+                first = false;
+            }
+            printf("\n");
+        }
     }
+    printf("\n");
 #endif
 }
 
-void computePaymentAmounts(const Graph &payments, Graph *paymentsSpan,
-                           const map<Edge, set<Vertex> > &routingTable) {
+void computePaymentAmounts(
+        const Graph &payments, Graph *paymentsSpan,
+        const map<pair<Vertex, Vertex>, set<Vertex> > &routingTable) {
     // A per-vertex list that stores the amount that needs to be forwarded to
     // which destination node.
     map<Vertex, map<Vertex, double> > forwardPayments;
 
+    // Resets the payment entries of all edges.
+    Graph::edge_iterator eit, eend;
+    for (tie(eit, eend) = edges(*paymentsSpan); eit != eend; ++eit) {
+        put(edge_capacity, *paymentsSpan, *eit, 0);
+    }
+
+    // Sorts the vertices. If there is an edge (u, v) then v comes before u in
+    // the ordering.
     vector<Vertex> sortedVertices;
     topological_sort(*paymentsSpan, std::back_inserter(sortedVertices));
 
+    // Runs from the sources to the sinks over the payments span.
     for (vector<Vertex>::const_reverse_iterator vit = sortedVertices.rbegin();
          vit != sortedVertices.rend(); ++vit) {
         const Vertex from = *vit;
@@ -391,38 +422,45 @@ void computePaymentAmounts(const Graph &payments, Graph *paymentsSpan,
                 get(edge_capacity, payments, *oeit);
         }
 
-        // Forwards the payments one hop by running over all outgoing edges and
-        // adjusting the forwardPayments entries for these nodes.
-        // It also computes and sets the total payment amount for these edges.
-        for (tie(oeit, oeend) = out_edges(from, *paymentsSpan); oeit != oeend;
-             ++oeit) {
-            const Vertex to = target(*oeit, *paymentsSpan);
+        // Forwards the payments one hop by looking up the next hops for each
+        // destination node and increasing their forwardPayments entries
+        // accordingly.
+        for (map<Vertex, double>::const_iterator it = paymentList.begin();
+             it != paymentList.end(); ++it) {
+            const Vertex &to = it->first;
+            const double &amount = it->second;
 
-            double &edgeAmount = get(edge_capacity, *paymentsSpan, *oeit);
-            edgeAmount = 0.0;
+            if (to == from) {
+                // This is the payment entry to us. We keep that money.
+                continue;
+            }
 
-            // Runs over the nodes that are after the current edge and checks
-            // if there are forward-payments that have to be written to the to's
-            // forward payments list.
-            for (set<Vertex>::const_iterator it =
-                     routingTable.at(*oeit).begin();
-                 it != routingTable.at(*oeit).end(); ++it) {
-                const Vertex paymentTargetNode = *it;
+            // Looks up the hops in the routing table.
+            const set<Vertex> &hops = routingTable.at(std::make_pair(from, to));
+            assert(!hops.empty());
 
-                map<Vertex, double>::const_iterator paymentAmountIt =
-                    paymentList.find(paymentTargetNode);
-                if (paymentAmountIt != paymentList.end()) {
-                    // Payments to paymentTargetNode are forwarded through this
-                    // edge.
-                    double forwardAmount = paymentAmountIt->second;
+            // Splits the amount evenly between the multiple paths.
+            double amountPerPath = floor(amount / hops.size());
+            for (set<Vertex>::const_iterator hopIt = hops.begin();
+                 hopIt != hops.end(); ++hopIt) {
+                const Vertex &hop = *hopIt;
 
-                    edgeAmount += forwardAmount;
-                    forwardPayments[to][paymentTargetNode] += forwardAmount;
-                }
+                // We split the amount per path into integer parts. If we are
+                // the first path, we cover for eventual rounding errors.
+                double pathAmount = hopIt != hops.begin()
+                        ? amountPerPath
+                        : amount - (hops.size() - 1) * amountPerPath;
+
+                // Increases the amount we send along the edge to the hop node.
+                double &edgeAmount = get(edge_capacity, *paymentsSpan,
+                                         edge(from, hop, *paymentsSpan).first);
+                edgeAmount += pathAmount;
+
+                // Increases the forward amount at the hop for the final target.
+                forwardPayments[hop][to] += pathAmount;
             }
         }
     }
-
 }
 
 vector<double> computeNodeGain(const Graph &payments) {
@@ -441,17 +479,18 @@ vector<double> computeNodeGain(const Graph &payments) {
     return nodeGain;
 }
 
-void verifyNodeGain(const vector<double> &originalNodeGain,
-                    const Graph &payments) {
+void verifyNodeGain(const Graph &left, const Graph &right) {
+    const vector<double> &leftGain = computeNodeGain(left);
+    const vector<double> &rightGain = computeNodeGain(right);
+
     bool error = false;
-    const vector<double> &newGain = computeNodeGain(payments);
-    for (size_t i = 0; i < newGain.size(); ++i) {
+    for (size_t i = 0; i < leftGain.size(); ++i) {
         // Checks if the difference is bigger than one cent.
-        if (std::fabs(originalNodeGain[i] - newGain[i]) > 0.01) {
+        if (std::fabs(leftGain[i] - rightGain[i]) > 0.01) {
             error = true;
             fprintf(stderr, "Gain-error at node '%s' (%.2f vs %.2f).\n",
-                    get(boost::vertex_name, payments, i).c_str(),
-                    originalNodeGain[i], newGain[i]);
+                    get(boost::vertex_name, left, i).c_str(),
+                    leftGain[i], rightGain[i]);
         }
     }
 

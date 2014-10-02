@@ -42,9 +42,17 @@ Graph readGraphFromStdIO() {
         Vertex to = mapNameToVertex(toName, &payments, &nameToVertex);
 
         // Adds the edge to the graph.
+        bool inserted;
         Edge e;
-        tie(e, boost::tuples::ignore) = add_edge(from, to, payments);
-        put(boost::edge_capacity, payments, e, amount);
+        tie(e, inserted) = add_edge(from, to, payments);
+
+        // Sets or increases the edge amount (duplicate edges are disallowed).
+        double &edgeAmount = get(boost::edge_capacity, payments, e);
+        if (inserted) {
+            edgeAmount = amount;
+        } else {
+            edgeAmount += amount;
+        }
     }
 
     return payments;
@@ -95,9 +103,10 @@ int main(int, char **) {
     Graph payments = readGraphFromStdIO();
 
     // Computes the minimum transactions.
-    reduceToMinimumTransactions(&payments);
+    Graph paymentsSpan;
+    createMinimumTransactionsGraph(payments, &paymentsSpan);
 
     // Prints out the final payments.
-    printPaymentsToStdIO(payments);
+    printPaymentsToStdIO(paymentsSpan);
 }
 

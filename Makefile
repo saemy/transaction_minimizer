@@ -1,14 +1,22 @@
 # Should debugging be enabled?
-DEBUG = 0
+DEBUG ?= 0
 
 OBJECTS = main.o transaction_minimizer.o
 EXEC = transaction_minimizer
-CXXFLAGS = -Wall -O3 -DDEBUG=$(DEBUG)
-CC = g++
-RM = rm 
+CXXFLAGS = -Wall
+CXX = g++
+RM = rm -f
 
-all: $(OBJECTS)
-	$(CC) $(FLAGS) -o $(EXEC) $(OBJECTS)
+ifeq ($(DEBUG), 0)
+    CXXFLAGS += -O3
+else
+    CXXFLAGS += -O0 -g -DDEBUG=1
+endif
+
+$(EXEC): $(OBJECTS)
+	$(CXX) $(FLAGS) -o $@ $(OBJECTS)
+
+all: $(EXEC)
 
 clean:
-	$(RM) -f $(OBJECTS) $(EXEC)
+	$(RM) $(OBJECTS) $(EXEC)
